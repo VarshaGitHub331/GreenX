@@ -171,9 +171,7 @@ router.post("/recommend", async (req, res) => {
 
   try {
     // ✅ Step 1: Fetch courses by preferences
-    const courses = await Course.find({
-      preferences: { $in: preferences },
-    });
+    const courses = await Course.find({});
 
     if (courses.length === 0) {
       return res.status(404).json({ message: "No matching courses found" });
@@ -181,40 +179,44 @@ router.post("/recommend", async (req, res) => {
 
     // ✅ Step 2: Prepare Gemini prompt
     const prompt = `
-      Filter the following courses based on the given materials. Only include courses that involve all or most of the materials.
+    Based on the provided user preferences and required materials, recommend the most suitable courses. 
+    Only include courses that align well with the user preferences and include all or most of the listed materials.
   
-      - **Courses:**
-      ${courses
-        .map(
-          (course) => `
+    - **User Preferences:** ${preferences.join(", ")}
+    - **Materials to match:** ${materials.join(", ")}
+  
+    - **Available Courses:**
+    ${courses
+      .map(
+        (course) => `
         - Title: ${course.title}
         - Description: ${course.description}
         - Materials: ${course.materials.join(", ")}
         `
-        )
-        .join("\n")}
+      )
+      .join("\n")}
   
-      - **Materials to match:** ${materials.join(", ")}
+    Please analyze each course and return only those that fit both the materials and preferences as closely as possible.
   
-      Please return the filtered courses in this JSON format:
-      [
-        {
-          "title": "Course Title",
-          "description": "Brief course description",
-          "steps": [
-            {
-              "step_number": 1,
-              "description": "Step description",
-              "tools_needed": ["Tool1", "Tool2"]
-            }
-          ],
-          "tips": ["Tip1", "Tip2"],
-          "tools": ["Tool1", "Tool2"],
-          "imageUrl": "https://course-image.com",
-          "difficulty": "Beginner / Intermediate / Advanced"
-        }
-      ]
-      `;
+    Format the output as a JSON array like this:
+    [
+      {
+        "title": "Course Title",
+        "description": "Brief course description",
+        "steps": [
+          {
+            "step_number": 1,
+            "description": "Step description",
+            "tools_needed": ["Tool1", "Tool2"]
+          }
+        ],
+        "tips": ["Tip1", "Tip2"],
+        "tools": ["Tool1", "Tool2"],
+        "imageUrl": "https://course-image.com",
+        "difficulty": "Beginner / Intermediate / Advanced"
+      }
+    ]
+  `;
 
     // ✅ Step 3: Call Gemini model (same as your `create` route)
     const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
@@ -245,15 +247,138 @@ router.post("/recommend", async (req, res) => {
     const cleanedResponse = content.replace(/```json|```/g, "").trim();
 
     // ✅ Parse the Gemini response
+    // ✅ Try to extract a JSON block safely
     let filteredCourses;
     try {
-      filteredCourses = JSON.parse(cleanedResponse);
+      // Prefer content inside ```json ... ```
+      const jsonMatch = content.match(/```json\s*([\s\S]*?)\s*```/);
+
+      const jsonString = jsonMatch ? jsonMatch[1].trim() : content.trim();
+
+      filteredCourses = JSON.parse(jsonString);
     } catch (error) {
       console.error("Error parsing Gemini response:", error);
-      return res
-        .status(500)
-        .json({ message: "Failed to parse Gemini response" });
+      return res.status(500).json({
+        message: "Failed to parse Gemini response",
+        rawResponse: content, // helpful for debugging
+      });
     }
+
+    // ✅ Return the final filtered courses
+    res.json({ filteredCourses });
+  } catch (error) {
+    console.error("Error in recommendation:", error.message);
+    res.status(500).json({ message: "Error filtering courses" });
+  }
+});
+router.post("/recommended/forMe", async (req, res) => {
+  const { preferences } = req.body;
+  console.log(preferences);
+  if (preferences == []) {
+    return res
+      .status(400)
+      .json({ message: "Preferences and materials required" });
+  }
+
+  try {
+    // ✅ Step 1: Fetch courses by preferences
+    const courses = await Course.find({});
+
+    if (courses.length === 0) {
+      return res.status(404).json({ message: "No matching courses found" });
+    }
+
+    // ✅ Step 2: Prepare Gemini prompt
+    const prompt = `
+    Based on the provided user preferences , recommend the most suitable courses. 
+    Only include courses that align well with the user preferences and include all or most of the listed materials.
+  
+    - **User Preferences:** ${preferences.join(", ")}
+  
+    - **Available Courses:**
+    ${courses
+      .map(
+        (course) => `
+        - Title: ${course.title}
+        - Description: ${course.description}
+        - Materials: ${course.materials.join(", ")}
+        `
+      )
+      .join("\n")}
+  
+    Please analyze each course and return only those that fit the user's preferences as closely as possible.
+  
+    Format the output as a JSON array like this:
+    [
+      {
+        "title": "Course Title",
+        "description": "Brief course description",
+        "steps": [
+          {
+            "step_number": 1,
+            "description": "Step description",
+            "tools_needed": ["Tool1", "Tool2"]
+          }
+        ],
+        "tips": ["Tip1", "Tip2"],
+        "tools": ["Tool1", "Tool2"],
+        "imageUrl": "https://course-image.com",
+        "difficulty": "Beginner / Intermediate / Advanced"
+      }
+    ]
+  `;
+
+    // ✅ Step 3: Call Gemini model (same as your `create` route)
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+
+    const response = await model.generateContent({
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+    });
+
+    console.log("Full Gemini Response:", response);
+
+    if (
+      !response ||
+      !response.response ||
+      !response.response.candidates ||
+      response.response.candidates.length === 0
+    ) {
+      throw new Error("No candidates found in the response from the AI model");
+    }
+
+    // ✅ Extract and clean the response
+    const candidate = response.response.candidates[0];
+    const content = candidate?.content?.parts?.[0]?.text;
+    console.log("🧠 Gemini Raw Output:\n", content); // Add this
+
+    if (!content) {
+      throw new Error("No valid content found in the AI model response");
+    }
+
+    const cleanedResponse = content.replace(/```json|```/g, "").trim();
+
+    // ✅ Parse the Gemini response
+    // ✅ Try to extract a JSON block safely
+    let filteredCourses;
+    try {
+      // Extract only JSON array from full Gemini response
+      const arrayStart = content.indexOf("[");
+      const arrayEnd = content.lastIndexOf("]");
+
+      if (arrayStart === -1 || arrayEnd === -1) {
+        throw new Error("No JSON array found in Gemini output");
+      }
+
+      const jsonString = content.slice(arrayStart, arrayEnd + 1);
+      filteredCourses = JSON.parse(jsonString);
+    } catch (error) {
+      console.error("❌ Error parsing Gemini response:", error);
+      return res.status(500).json({
+        message: "Failed to parse Gemini response",
+        rawResponse: content, // Helpful for debugging
+      });
+    }
+    console.log(filteredCourses);
 
     // ✅ Return the final filtered courses
     res.json({ filteredCourses });

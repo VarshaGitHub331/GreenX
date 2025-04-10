@@ -9,6 +9,18 @@ const userSchema = new mongoose.Schema({
     type: [String], // e.g., ["upcycling", "recycling"]
     default: [],
   },
+  enrolledCourses: [
+    {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Course", // 👈 assuming you have a Course model
+    },
+  ],
+  completedCourses: [
+    {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Course",
+    },
+  ],
   createdAt: { type: Date, default: Date.now },
 });
 

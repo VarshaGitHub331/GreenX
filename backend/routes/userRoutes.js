@@ -3,7 +3,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import User from "../models/userModel.js";
 import dotenv from "dotenv";
-
+import Course from "../models/courseModel.js"; // Adjust path as necessary
 dotenv.config();
 const router = express.Router();
 const tokenBlacklist = new Set();
@@ -199,5 +199,135 @@ router.get("/:id/preferences", async (req, res) => {
     res.status(500).json({ message: "Server error", error: error.message });
   }
 });
+// POST /api/users/enroll
+router.post("/enroll", async (req, res) => {
+  console.log("Here to enroll");
+  const { userId, courseId } = req.body;
 
+  if (!userId || !courseId) {
+    return res
+      .status(400)
+      .json({ message: "User ID and Course ID are required." });
+  }
+
+  try {
+    const user = await User.findById(userId);
+    const course = await Course.findById(courseId);
+
+    if (!user || !course) {
+      return res.status(404).json({ message: "User or Course not found." });
+    }
+
+    // Check if already enrolled
+    if (user.enrolledCourses.includes(courseId)) {
+      return res
+        .status(400)
+        .json({ message: "User already enrolled in this course." });
+    }
+
+    // Enroll user
+    user.enrolledCourses.push(courseId);
+    await user.save();
+    console.log("After pushing enrolled courses", user.enrolledCourses);
+    res.status(200).json({
+      message: "Enrolled successfully",
+      enrolledCourses: user.enrolledCourses,
+    });
+  } catch (error) {
+    console.error("Enrollment error:", error);
+    res
+      .status(500)
+      .json({ message: "Enrollment failed", error: error.message });
+  }
+});
+router.post("/complete", async (req, res) => {
+  const { userId, courseId } = req.body;
+
+  if (!userId || !courseId) {
+    return res
+      .status(400)
+      .json({ message: "User ID and Course ID are required." });
+  }
+
+  try {
+    const user = await User.findById(userId);
+    const course = await Course.findById(courseId);
+
+    if (!user || !course) {
+      return res.status(404).json({ message: "User or Course not found." });
+    }
+
+    // Check if course is enrolled
+    if (!user.enrolledCourses.includes(courseId)) {
+      return res
+        .status(400)
+        .json({ message: "User is not enrolled in this course." });
+    }
+
+    // Remove from enrolledCourses
+    user.enrolledCourses = user.enrolledCourses.filter(
+      (id) => id.toString() !== courseId
+    );
+
+    // Add to completedCourses only if not already present
+    if (!user.completedCourses.includes(courseId)) {
+      user.completedCourses.push(courseId);
+    }
+
+    await user.save();
+
+    res.status(200).json({
+      message: "Course marked as completed",
+      enrolledCourses: user.enrolledCourses,
+      completedCourses: user.completedCourses,
+    });
+  } catch (error) {
+    console.error("Completion error:", error);
+    res
+      .status(500)
+      .json({ message: "Failed to complete course", error: error.message });
+  }
+});
+router.post("/enrolled-courses", async (req, res) => {
+  const { userId } = req.body; // Assuming the user is authenticated and we have access to `req.user._id`
+
+  try {
+    // Find the user and populate the enrolledCourses array
+    const user = await User.findById(userId).populate("enrolledCourses");
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    console.log("Enrolled courses are ", user.enrolledCourses);
+    // Return the enrolled courses
+    res.status(200).json({
+      enrolledCourses: user.enrolledCourses,
+    });
+  } catch (error) {
+    console.error("Error fetching enrolled courses:", error);
+    res.status(500).json({
+      message: "Error fetching enrolled courses",
+      error: error.message,
+    });
+  }
+});
+router.get("/leaderboard", async (req, res) => {
+  try {
+    const users = await User.find({})
+      .select("name completedCourses") // Fetch only necessary fields
+      .lean();
+
+    const sortedUsers = users
+      .map((user) => ({
+        name: user.name,
+        completedCount: user.completedCourses?.length || 0,
+      }))
+      .sort((a, b) => b.completedCount - a.completedCount);
+
+    res.json(sortedUsers);
+  } catch (error) {
+    console.error("Error fetching leaderboard:", error);
+    res.status(500).json({ message: "Failed to fetch leaderboard" });
+  }
+});
 export default router;
